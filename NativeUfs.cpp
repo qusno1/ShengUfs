@@ -45,6 +45,12 @@ static UfsRootDiagnostics gRootDiagnostic;
 static bool gRootDiagnosticEnabled;
 static void rootDiagnosticFailure (const char *reason);
 
+// RootLayout.h reads this before the first block. "userdata" is sheng's layout, where the
+// root image was flashed over the whole userdata partition; this board keeps Android's
+// userdata and stores the root image in its own GPT partition, so the name is selected by
+// the boot argument vermeer-root-partition at start time. The default keeps sheng working.
+const char *gRootPartitionName = "userdata";
+
 extern "C" {
 // Optional passive observer; absent in ordinary builds. It may run while a
 // window lock is held, so its contract forbids blocking or transport access.
@@ -2541,6 +2547,23 @@ bool NativeUfs::start (IOService *provider)
 bool NativeUfs::startRoot (IOService *provider)
 {
   const char *why = "";
+  // vermeer: the root image lives in its own GPT partition, selected by name. sheng's
+  // layout keeps it in "userdata", which is also the default here, so a board that does
+  // not pass the argument behaves exactly as before. The copy is a static buffer because
+  // the boot argument storage is not guaranteed to outlive this call, and an allocation
+  // here could fail and leave the parser holding a null name.
+  {
+    static char partitionName[32];
+    char name[32] = {};
+    if (PE_parse_boot_argn ("vermeer-root-partition", name, sizeof (name)) && name[0]) {
+      for (unsigned i = 0; i < sizeof (partitionName); i++) {
+        partitionName[i] = name[i];
+      }
+      partitionName[sizeof (partitionName) - 1] = 0;
+      gRootPartitionName = partitionName;
+      IOLog ("NativeUfs: root partition is \"%s\"\n", partitionName);
+    }
+  }
   native_ufs_root_step = 1;
   if (!hostBringUp (&why)) {
     rootDiagnosticFailure (why);

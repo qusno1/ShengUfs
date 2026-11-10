@@ -2,6 +2,14 @@
 #pragma once
 // Shared production parser. Requires hostRead4k, SHA256, diagnostics and C memory primitives.
 // ---- LUN 0 GPT and the root-image manifest -------------------------------------------------
+
+// The partition that carries the root image. sheng hardcoded "userdata" because on that
+// tablet userdata is the whole remaining disk, and the root image was flashed over it.
+// This board keeps Android's userdata untouched and stores the root image in a separate
+// GPT partition, so the name has to be a runtime value. NativeUfs.cpp defines it from the
+// boot argument vermeer-root-partition, defaulting to "userdata" so sheng is unchanged.
+extern const char *gRootPartitionName;
+
 struct RootWindow {
   char name[32];
   uint64_t offset;   // bytes from the start of the userdata partition
@@ -105,7 +113,15 @@ static bool findRootLayout (RootLayout *layout, const char **why)
     *why = "GPT entries CRC";
     return false;
   }
-  static const char wanted[] = "userdata";
+  // vermeer: the partition that carries the root image is a board property, not a
+  // constant. sheng keeps its root in the partition named "userdata" because that
+  // partition is the whole remaining disk there; this board keeps Android's
+  // userdata intact and puts the root image in a separate partition instead, so
+  // the name cannot be compiled in. gRootPartitionName is set before the first
+  // read and defaults to "userdata", which keeps sheng's behaviour unchanged.
+  const char *wanted = gRootPartitionName;
+  size_t wantedLen = 0;
+  while (wanted[wantedLen] && wantedLen <= 31) wantedLen++;
   bool found = false;
   for (uint32_t index = 0; index < count; index++) {
     const uint8_t *entry = gScratch + index * 128;
@@ -122,12 +138,16 @@ static bool findRootLayout (RootLayout *layout, const char **why)
         return false;
       }
     }
-    bool match = true;
-    for (unsigned c = 0; c < sizeof (wanted); c++) {
+    bool match = wantedLen > 0 && wantedLen <= 31;
+    for (unsigned c = 0; match && c < wantedLen; c++) {
       if (entry[56 + 2 * c] != static_cast<uint8_t> (wanted[c]) || entry[57 + 2 * c] != 0) {
         match = false;
-        break;
       }
+    }
+    // The name field is NUL terminated: the character right after the name must be NUL too,
+    // so a short name does not match a longer partition that merely starts with it.
+    if (match && entry[56 + 2 * wantedLen] != 0) {
+      match = false;
     }
     if (match) {
       if (found) {
